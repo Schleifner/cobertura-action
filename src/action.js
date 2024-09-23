@@ -19,13 +19,16 @@ async function action(payload) {
   const skipCovered = JSON.parse(
     core.getInput("skip_covered", { required: true }),
   );
-  const showLine = JSON.parse(core.getInput("show_line", { required: true }));
-  const showBranch = JSON.parse(
-    core.getInput("show_branch", { required: true }),
-  );
-  const minimumCoverage = parseInt(
-    core.getInput("minimum_coverage", { required: true }),
-  );
+  const showLine = true;
+  const showBranch = true;
+  let minimumLineCoverage =
+    core.getInput("minimum_line_coverage", { required: true }) || null;
+  minimumLineCoverage = minimumLineCoverage ? parseInt(minimumLineCoverage) : null;
+  let minimumBranchCoverage = core.getInput("minimum_branch_coverage", {
+    required: true,
+  }) || null;
+  minimumBranchCoverage = minimumBranchCoverage ? parseInt(minimumBranchCoverage) : null;
+
   const failBelowThreshold = JSON.parse(
     core.getInput("fail_below_threshold", { required: false }) || "false",
   );
@@ -57,7 +60,8 @@ async function action(payload) {
 
   const reports = await processCoverage(path, { skipCovered });
   const comment = markdownReport(reports, commit, {
-    minimumCoverage,
+    minimumLineCoverage,
+    minimumBranchCoverage,
     showLine,
     showBranch,
     showClassNames,
@@ -69,9 +73,17 @@ async function action(payload) {
     reportName,
   });
 
-  const belowThreshold = reports.some(
-    (report) => Math.floor(report.total) < minimumCoverage,
-  );
+  const belowThreshold = reports.some((report) => {
+    const lineBelowThreshold = minimumLineCoverage !== null
+      ? Math.floor(report.line) < minimumLineCoverage
+      : false;
+
+    const branchBelowThreshold = minimumBranchCoverage !== null
+      ? Math.floor(report.branch) < minimumBranchCoverage
+      : false;
+
+    return lineBelowThreshold || branchBelowThreshold;
+  });
 
   if (pullRequestNumber) {
     await addComment(pullRequestNumber, comment, reportName);
@@ -151,7 +163,8 @@ function formatMissingLines(
 
 function markdownReport(reports, commit, options) {
   const {
-    minimumCoverage = 100,
+    minimumLineCoverage = 100,
+    minimumBranchCoverage = 100,
     showLine = false,
     showBranch = false,
     showClassNames = false,
@@ -162,8 +175,8 @@ function markdownReport(reports, commit, options) {
     filteredFiles = null,
     reportName = "Coverage Report",
   } = options || {};
-  const status = (total) =>
-    total >= minimumCoverage ? ":white_check_mark:" : ":x:";
+  const status = (lineCoverage, branchCoverage) =>
+    lineCoverage >= minimumLineCoverage && branchCoverage >= minimumBranchCoverage ? ":white_check_mark:" : ":x:";
   // Setup files
   const files = [];
   let output = "";
@@ -180,14 +193,14 @@ function markdownReport(reports, commit, options) {
         `\`${fileTotal}%\``,
         showLine ? `\`${fileLines}%\`` : undefined,
         showBranch ? `\`${fileBranch}%\`` : undefined,
-        status(fileTotal),
+        status(fileLines, fileBranch),
         showMissing && file.missing
           ? formatMissingLines(
-              formatFileUrl(linkMissingLinesSourceDir, file.filename, commit),
-              file.missing,
-              showMissingMaxLength,
-              linkMissingLines,
-            )
+            formatFileUrl(linkMissingLinesSourceDir, file.filename, commit),
+            file.missing,
+            showMissingMaxLength,
+            linkMissingLines,
+          )
           : undefined,
       ]);
     }
@@ -228,7 +241,7 @@ function markdownReport(reports, commit, options) {
         `\`${total}%\``,
         showLine ? `\`${linesTotal}%\`` : undefined,
         showBranch ? `\`${branchTotal}%\`` : undefined,
-        status(total),
+        status(linesTotal, branchTotal),
         showMissing ? " " : undefined,
       ],
       ...files,
@@ -240,7 +253,7 @@ function markdownReport(reports, commit, options) {
     const titleText = `<strong>${reportName}${folder}</strong>`;
     output += `${titleText}\n\n${table}\n\n`;
   }
-  const minimumCoverageText = `_Minimum allowed coverage is \`${minimumCoverage}%\`_`;
+  const minimumCoverageText = `_Minimum allowed line coverage is \`${minimumLineCoverage}%\`, branch coverage is \`${minimumBranchCoverage}%\`_`;
   const footerText = `<p align="right">${credits} against ${commit} </p>`;
   output += `${minimumCoverageText}\n\n${footerText}`;
   return output;
